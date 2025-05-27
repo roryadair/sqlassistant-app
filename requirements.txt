@@ -1,0 +1,7 @@
+streamlit
+openai
+duckdb
+pandas
+faker
+python-dotenv
+pyperclip

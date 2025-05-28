@@ -67,14 +67,28 @@ st.sidebar.title("Settings")
 #             value = st.checkbox(label, value=default, key=state_key)
 #             st.session_state.roadmap_status[state_key] = value
 
+#Choose GPT Model
+model_options = {
+    "gpt-3.5-turbo": "💨 GPT-3.5 Turbo ($0.50 in / $1.50 out)",
+    "o4-mini": "⚡ o4-mini ($1.10 in / $4.40 out)",
+    "gpt-4.1": "🧠 GPT-4.1 ($2.00 in / $8.00 out)",
+    "gpt-4-turbo": "🚀 GPT-4 Turbo ($10.00 in / $30.00 out)",
+}
 
-model_choice = st.sidebar.selectbox(
-    "Choose a model:",
-    options=["gpt-3.5-turbo", "gpt-4-turbo"],
-    index=1
-)
-st.session_state["model"] = model_choice
+model_labels = list(model_options.values())
+model_keys = list(model_options.keys())
 
+default_model = model_keys.index("gpt-4.1")
+
+selected_label = st.sidebar.selectbox("Choose a model:", model_labels, index=default_model)
+st.session_state["model"] = model_keys[model_labels.index(selected_label)]
+
+# model_choice = st.sidebar.selectbox(
+#     "Choose a model:",
+#     options=["gpt-3.5-turbo", "gpt-4-turbo"],
+#     index=1
+# )
+#st.session_state["model"] = model_choice
 
 with st.sidebar.expander("🗺️ Roadmap Progress", expanded=False):
     st.markdown("### Phase 1: Foundation & Usability")
@@ -231,8 +245,11 @@ def parse_schema(schema_text):
     return tables
 
 # Initialize OpenAI client
-client = OpenAI(api_key=st.secrets["openai"]["api_key"])
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Initialize OpenAI client
+# client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 # Initialize session state
 if "sql_output" not in st.session_state:
@@ -282,12 +299,11 @@ user_input = st.text_area(
     placeholder="e.g., Show me the total revenue by category for last month."
 )
 
-st.session_state.last_question = user_input
-
-st.session_state.last_question = st.session_state["last_question"]
-
 # --- Prompt Templates Section ---
-with st.expander("💡 Prompt Templates", expanded=False):
+if "collapse_prompt_templates" not in st.session_state:
+    st.session_state.collapse_prompt_templates = True
+
+with st.expander("💡 Prompt Templates", expanded=not st.session_state.get("collapse_prompt_templates", True)):
     st.markdown("Click an example to insert it into your question:")
 
     prompt_templates = [
@@ -301,7 +317,25 @@ with st.expander("💡 Prompt Templates", expanded=False):
     for i, example in enumerate(prompt_templates):
         if st.button(example, key=f"template_{i}"):
             st.session_state["inject_template"] = example
+            st.session_state.collapse_prompt_templates = True
             st.rerun()
+
+
+# with st.expander("💡 Prompt Templates", expanded=False):
+#     st.markdown("Click an example to insert it into your question:")
+
+#     prompt_templates = [
+#         "Top 10 customers by revenue",
+#         "Total sales by region for the last year",
+#         "List all orders over $500",
+#         "Average order value per customer",
+#         "Monthly revenue trend",
+#     ]
+
+#     for i, example in enumerate(prompt_templates):
+#         if st.button(example, key=f"template_{i}"):
+#             st.session_state["inject_template"] = example
+#             st.rerun()
 
 
 st.markdown("### 🧩 Schema Help")
@@ -453,7 +487,7 @@ if schema_input.strip():
 
 missing_columns = []
 
-if st.button("Generate SQL") and user_input:
+if st.button("🌟Generate SQL") and user_input:
     with st.spinner("Thinking..."):
         try:
             if schema_input.strip() and not re.search(r"\w+\s*\(.*?\)", schema_input):
@@ -486,19 +520,48 @@ if st.button("Generate SQL") and user_input:
                 {"role": "user", "content": user_prompt}
             ]
 
-            response = client.chat.completions.create(
-                model=st.session_state["model"],
-                messages=messages,
-                temperature=0.0
-            )
-            total_tokens = response.usage.total_tokens if response.usage else 0
-
-            model_prices = {
-                "gpt-3.5-turbo": 0.0015 / 1000,
-                "gpt-4-turbo": 0.01 / 1000
+            model = st.session_state["model"]
+            chat_args = {
+                "model": model,
+                "messages": messages,
             }
-            cost_estimate = total_tokens * model_prices.get(st.session_state["model"], 0)
-            st.caption(f"**Tokens used:** {total_tokens} | **Estimated cost:** ${cost_estimate:.5f}")
+
+            # Only set temperature if supported
+            if model != "o4-mini":
+                chat_args["temperature"] = 0.0  # Lower temperature for deterministic output
+
+            response = client.chat.completions.create(**chat_args)
+
+
+            if response.usage:
+                prompt_tokens = response.usage.prompt_tokens
+                completion_tokens = response.usage.completion_tokens
+                total_tokens = response.usage.total_tokens
+            else:
+                prompt_tokens = completion_tokens = total_tokens = 0
+
+            # Prices per 1M tokens
+            model_prices = {
+                "gpt-3.5-turbo": {"prompt": 0.0005, "completion": 0.0015},
+                "gpt-4-turbo": {"prompt": 0.01, "completion": 0.03},
+                "gpt-4.1": {"prompt": 0.0020, "completion": 0.0080},
+                "o4-mini": {"prompt": 0.0011, "completion": 0.0044},
+            }
+
+            model = st.session_state.get("model", "gpt-3.5-turbo")
+            pricing = model_prices.get(model, {"prompt": 0.0, "completion": 0.0})
+
+            cost_estimate = (
+                prompt_tokens * pricing["prompt"] / 1000 +
+                completion_tokens * pricing["completion"] / 1000
+            )
+
+            st.caption(
+                f"**Tokens used:** {total_tokens:,} "
+                f"(Prompt: {prompt_tokens:,}, Completion: {completion_tokens:,}) "
+                f"| **Estimated cost:** ${cost_estimate:.5f}"
+            )
+
 
             raw_response = response.choices[0].message.content.strip()
             sql_match = re.search(r"```sql\s*(.*?)```", raw_response, re.DOTALL | re.IGNORECASE)
@@ -538,122 +601,6 @@ if st.button("Generate SQL") and user_input:
 
         except Exception as e:
             st.error(f"Error: {e}")
-
-
-# Reset follow-up input if the flag is set
-if "reset_follow_up_input" not in st.session_state:
-    st.session_state.reset_follow_up_input = False
-
-if st.session_state.reset_follow_up_input:
-    st.session_state.follow_up_input = ""
-    st.session_state.reset_follow_up_input = False
-
-if st.button("❌ Clear Follow-Up"):
-    if "follow_up_input" in st.session_state:
-        del st.session_state["follow_up_input"]
-    st.rerun()
-
-# Inject selected follow-up before widget renders
-if "inject_followup" in st.session_state:
-    st.session_state["follow_up_input"] = st.session_state.pop("inject_followup")
-
-
-follow_up_input = st.text_input(
-    "🔁 Follow-up instruction (optional):",
-    value=st.session_state.get("follow_up_input", ""),
-    key="manual_followup_input",
-    placeholder="e.g., Now break that down by month"
-)
-
-
-
-followup_suggestions = [
-    "",  # default empty
-    "Now break it down by month",
-    "Add region to the breakdown",
-    "Filter for last 12 months only",
-    "Sort by descending revenue",
-    "Exclude customers with zero orders",
-]
-
-selected_suggestion = st.selectbox(
-    "💡 Suggested follow-ups:",
-    followup_suggestions,
-    index=0,
-    key="followup_suggestion"
-)
-
-if selected_suggestion and selected_suggestion != st.session_state.get("follow_up_input", ""):
-    st.session_state["inject_followup"] = selected_suggestion
-    st.rerun()
-
-st.caption(f"Refining:\n➡️ {st.session_state.last_question}\n↪️ {st.session_state.follow_up_input}")
-
-if st.button("🔁 Apply Follow-Up") and st.session_state.last_question and st.session_state.follow_up_input:
-    with st.spinner("Refining SQL..."):
-        try:
-            schema_prompt = (
-                f"Schema:\n{st.session_state.last_schema}\n\n"
-                if st.session_state.last_schema.strip()
-                else "Assume reasonable table and column names.\n\n"
-            )
-            relationships = infer_relationships(st.session_state.last_schema)
-            if relationships:
-                schema_prompt += "Inferred Relationships:\n" + "\n".join(relationships) + "\n\n"
-
-            user_prompt = (
-                "You previously generated the following SQL query:\n\n"
-                f"{st.session_state.sql_output}\n\n"
-                "The original request was:\n"
-                f"{st.session_state.last_question}\n\n"
-                "The user now provided this follow-up instruction:\n"
-                f"{st.session_state.follow_up_input}\n\n"
-                "Please revise the original SQL to reflect the follow-up. Return only the updated SQL in a ```sql block.\n"
-                "Use only columns that exist in the provided schema. If grouping by month, use EXTRACT(MONTH FROM order_date)."
-            )
-
-
-
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant that generates SQL queries. "
-                                              "If a schema is provided, use only the tables and columns it contains. "
-                                              "If not, make educated assumptions based on the user's question."},
-                {"role": "user", "content": schema_prompt + user_prompt}
-            ]
-
-            response = client.chat.completions.create(
-                model=st.session_state["model"],
-                messages=messages,
-                temperature=0.0
-            )
-
-            total_tokens = response.usage.total_tokens if response.usage else 0
-            model_prices = {
-                "gpt-3.5-turbo": 0.0015 / 1000,
-                "gpt-4-turbo": 0.01 / 1000
-            }
-            cost_estimate = total_tokens * model_prices.get(st.session_state["model"], 0)
-            st.caption(f"**Tokens used:** {total_tokens} | **Estimated cost:** ${cost_estimate:.5f}")
-
-            raw_response = response.choices[0].message.content.strip()
-            sql_match = re.search(r"```sql\s*(.*?)```", raw_response, re.DOTALL | re.IGNORECASE)
-            refined_sql = sql_match.group(1).strip() if sql_match else raw_response
-
-            # ✅ This is critical: update the main output
-            st.session_state.sql_output = refined_sql
-
-            # ✅ Log the refined conversation
-            st.session_state.conversation_history.append({
-                "question": st.session_state.last_question,
-                "follow_up": st.session_state.follow_up_input,
-                "sql": refined_sql
-            })
-
-            st.session_state.follow_up_input = ""
-
-        except Exception as e:
-            st.error(f"Refinement Error: {e}")
-
 
 if st.session_state.sql_output:
     tabs = st.tabs(["🧾 SQL", "🔍 Preview"])
@@ -754,6 +701,150 @@ if st.session_state.sql_output:
         except Exception as e:
             st.error(f"⚠️ Could not preview results: {e}")
 
+
+# Reset follow-up input if the flag is set
+if "reset_follow_up_input" not in st.session_state:
+    st.session_state.reset_follow_up_input = False
+
+if st.session_state.reset_follow_up_input:
+    st.session_state.follow_up_input = ""
+    st.session_state.reset_follow_up_input = False
+
+
+# Inject selected follow-up before widget renders
+if "inject_followup" in st.session_state:
+    st.session_state["follow_up_input"] = st.session_state.pop("inject_followup")
+
+
+follow_up_input = st.text_input(
+    "🔁 Follow-up instruction (optional):",
+    value=st.session_state.get("follow_up_input", ""),
+    key="manual_followup_input",
+    placeholder="e.g., Now break that down by month"
+)
+
+
+
+followup_suggestions = [
+    "",  # default empty
+    "Now break it down by month",
+    "Add region to the breakdown",
+    "Filter for last 12 months only",
+    "Sort by descending revenue",
+    "Exclude customers with zero orders",
+]
+
+selected_suggestion = st.selectbox(
+    "💡 Suggested follow-ups:",
+    followup_suggestions,
+    index=0,
+    key="followup_suggestion"
+)
+
+if selected_suggestion and selected_suggestion != st.session_state.get("follow_up_input", ""):
+    st.session_state["inject_followup"] = selected_suggestion
+    st.rerun()
+
+st.caption(f"Refining:\n➡️ {st.session_state.last_question}\n↪️ {st.session_state.follow_up_input}")
+
+if st.button("🔁 Apply Follow-Up") and st.session_state.last_question and st.session_state.follow_up_input:
+    with st.spinner("Refining SQL..."):
+        try:
+            schema_prompt = (
+                f"Schema:\n{st.session_state.last_schema}\n\n"
+                if st.session_state.last_schema.strip()
+                else "Assume reasonable table and column names.\n\n"
+            )
+            relationships = infer_relationships(st.session_state.last_schema)
+            if relationships:
+                schema_prompt += "Inferred Relationships:\n" + "\n".join(relationships) + "\n\n"
+
+            user_prompt = (
+                "You previously generated the following SQL query:\n\n"
+                f"{st.session_state.sql_output}\n\n"
+                "The original request was:\n"
+                f"{st.session_state.last_question}\n\n"
+                "The user now provided this follow-up instruction:\n"
+                f"{st.session_state.follow_up_input}\n\n"
+                "Please revise the original SQL to reflect the follow-up. Return only the updated SQL in a ```sql block.\n"
+                "Use only columns that exist in the provided schema. If grouping by month, use EXTRACT(MONTH FROM order_date)."
+            )
+
+
+
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant that generates SQL queries. "
+                                              "If a schema is provided, use only the tables and columns it contains. "
+                                              "If not, make educated assumptions based on the user's question."},
+                {"role": "user", "content": schema_prompt + user_prompt}
+            ]
+
+            model = st.session_state["model"]
+            chat_args = {
+                "model": model,
+                "messages": messages,
+            }
+
+            # Only set temperature if supported
+            if model != "o4-mini":
+                chat_args["temperature"] = 0.0  # Lower temperature for deterministic output
+
+            response = client.chat.completions.create(**chat_args)
+
+
+            if response.usage:
+                prompt_tokens = response.usage.prompt_tokens
+                completion_tokens = response.usage.completion_tokens
+                total_tokens = response.usage.total_tokens
+            else:
+                prompt_tokens = completion_tokens = total_tokens = 0
+
+            # Prices per 1M tokens
+            model_prices = {
+                "gpt-3.5-turbo": {"prompt": 0.0005, "completion": 0.0015},
+                "gpt-4-turbo": {"prompt": 0.01, "completion": 0.03},
+                "gpt-4.1": {"prompt": 0.0020, "completion": 0.0080},
+                "o4-mini": {"prompt": 0.0011, "completion": 0.0044},
+            }
+
+            model = st.session_state.get("model", "gpt-3.5-turbo")
+            pricing = model_prices.get(model, {"prompt": 0.0, "completion": 0.0})
+
+            cost_estimate = (
+                prompt_tokens * pricing["prompt"] / 1000 +
+                completion_tokens * pricing["completion"] / 1000
+            )
+
+            st.caption(
+                f"**Tokens used:** {total_tokens:,} "
+                f"(Prompt: {prompt_tokens:,}, Completion: {completion_tokens:,}) "
+                f"| **Estimated cost:** ${cost_estimate:.5f}"
+            )
+
+
+            raw_response = response.choices[0].message.content.strip()
+            sql_match = re.search(r"```sql\s*(.*?)```", raw_response, re.DOTALL | re.IGNORECASE)
+            refined_sql = sql_match.group(1).strip() if sql_match else raw_response
+
+            # ✅ This is critical: update the main output
+            st.session_state.sql_output = refined_sql
+
+            # ✅ Log the refined conversation
+            st.session_state.conversation_history.append({
+                "question": st.session_state.last_question,
+                "follow_up": st.session_state.follow_up_input,
+                "sql": refined_sql
+            })
+
+            st.session_state.follow_up_input = ""
+
+        except Exception as e:
+            st.error(f"Refinement Error: {e}")
+
+if st.button("❌ Clear Follow-Up"):
+    if "follow_up_input" in st.session_state:
+        del st.session_state["follow_up_input"]
+    st.rerun()
 
 
 if os.path.exists("query_log.csv"):

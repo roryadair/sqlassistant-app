@@ -245,11 +245,11 @@ def parse_schema(schema_text):
     return tables
 
 # Initialize OpenAI client
-load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# load_dotenv()
+# client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Initialize OpenAI client
-# client = OpenAI(api_key=st.secrets["openai"]["api_key"])
+Initialize OpenAI client
+client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 # Initialize session state
 if "sql_output" not in st.session_state:

@@ -248,7 +248,7 @@ def parse_schema(schema_text):
 # load_dotenv()
 # client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-Initialize OpenAI client
+#Initialize OpenAI client
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 # Initialize session state
